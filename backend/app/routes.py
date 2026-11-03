@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import hashlib
+import re
 from uuid import uuid4
 
 import fitz
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.models import ApplicantDocument, ApplicationSession
-from app.schemas import ApplicantProfile, DocumentSummary, HealthResponse, ReadinessReport, RequirementResult, SchemeSummary, SessionCreated
+from app.schemas import ApplicantProfile, DocumentSummary, HealthResponse, ReadinessReport, RequirementResult, RetrievalRequest, RetrievalResponse, SchemeSummary, SessionCreated
 from app.security import create_session_token, hash_token
 
 router = APIRouter(prefix="/api")
@@ -72,6 +73,15 @@ def get_session(record: ApplicationSession = Depends(require_owned_session)):
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_session(record: ApplicationSession = Depends(require_owned_session), db: Session = Depends(get_db)):
+    from app.rag.retrieval import delete_session_evidence
+
+    try:
+        delete_session_evidence(record.id)
+    except ModuleNotFoundError:
+        # No vector collection exists yet; there is nothing to remove.
+        pass
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Could not remove this workspace's indexed evidence") from exc
     db.query(ApplicantDocument).filter_by(session_id=record.id).delete()
     db.delete(record)
     db.commit()
@@ -126,6 +136,16 @@ async def upload_document(
     record.report = None
     db.commit()
     db.refresh(document)
+    try:
+        from app.rag.retrieval import index_applicant_document
+        index_applicant_document(record.id, document.id, document.filename, document.extracted_text)
+        document.status = "processed_and_indexed"
+        db.commit()
+    except Exception:
+        # Keep the uploaded text available for the deterministic module even if local
+        # embedding setup is missing; retrieval UI reports the unavailable index.
+        document.status = "processed_index_unavailable"
+        db.commit()
     return DocumentSummary(id=document.id, filename=document.filename, page_count=document.page_count,
                            status=document.status, text_characters=len(extracted), created_at=document.created_at)
 
@@ -142,6 +162,13 @@ def delete_document(document_id: str, record: ApplicationSession = Depends(requi
     document = db.query(ApplicantDocument).filter_by(id=document_id, session_id=record.id).first()
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        from app.rag.retrieval import delete_applicant_document
+        delete_applicant_document(record.id, document.id)
+    except ModuleNotFoundError:
+        pass
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Could not remove the document's indexed evidence") from exc
     db.delete(document)
     record.report = None
     db.commit()
@@ -155,13 +182,31 @@ def assess(record: ApplicationSession = Depends(require_owned_session), db: Sess
     profile = record.profile
     requirements: list[RequirementResult] = []
     profile_fields = [
-        ("applicant_name", "Applicant name"), ("education_level", "Education level"),
+        ("education_level", "Education level"),
         ("course", "Course of study"), ("academic_year", "Academic year"),
     ]
     for field, title in profile_fields:
         value = profile.get(field)
         requirements.append(RequirementResult(id=field, title=title, status="UNCERTAIN" if value else "MISSING",
                                               explanation="Self-reported in the applicant profile; the demo does not independently verify it." if value else "Provide this information in the applicant profile."))
+    applicant_name = profile.get("applicant_name", "")
+    normalized_name = re.sub(r"[^a-z0-9]", "", applicant_name.casefold())
+    name_matches = [
+        document for document in docs
+        if normalized_name and normalized_name in re.sub(r"[^a-z0-9]", "", document.extracted_text.casefold())
+    ]
+    if name_matches:
+        name_status = "VERIFIED"
+        name_explanation = "The applicant name appears in the extracted PDF text. This confirms a text match only; it does not authenticate the PDF or verify the applicant's identity."
+    elif docs:
+        name_status = "UNCERTAIN"
+        name_explanation = "The applicant name was not found in the extracted text of the uploaded PDFs. Check spelling or upload a readable document that includes the name."
+    else:
+        name_status = "UNCERTAIN"
+        name_explanation = "Self-reported in the applicant profile. Upload readable supporting evidence to compare it against document text."
+    requirements.insert(0, RequirementResult(id="applicant_name", title="Applicant name", status=name_status,
+                                             explanation=name_explanation,
+                                             evidence_documents=[d.filename for d in name_matches]))
     # This is a transparent demo heuristic, not official document validation.
     categories = {
         "transcript": ("Academic transcript", ("transcript", "marksheet", "mark sheet", "grade report")),
@@ -197,3 +242,33 @@ def get_report(record: ApplicationSession = Depends(require_owned_session)):
     if not record.report:
         raise HTTPException(status_code=404, detail="No readiness report yet. Run an assessment first.")
     return record.report
+
+
+@router.post("/sessions/{session_id}/retrieve", response_model=RetrievalResponse)
+def retrieve_for_session(
+    request: RetrievalRequest,
+    record: ApplicationSession = Depends(require_owned_session),
+    db: Session = Depends(get_db),
+):
+    from app.rag.retrieval import search_applicant_evidence, search_policy
+
+    try:
+        results = []
+        if request.scope in {"policy", "both"}:
+            results.append(search_policy(request.query, DEMO_SCHEME.id))
+        if request.scope in {"evidence", "both"}:
+            from app.rag.retrieval import index_applicant_document
+            saved_documents = db.query(ApplicantDocument).filter_by(session_id=record.id).all()
+            for document in saved_documents:
+                index_applicant_document(record.id, document.id, document.filename, document.extracted_text)
+            results.append(search_applicant_evidence(request.query, record.id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Retrieval is unavailable. Install the Phase 3 dependencies and run policy ingestion first.") from exc
+    sources = [source for result in results for source in result["sources"]]
+    insufficient = not sources
+    message = ("Retrieved source passages are shown below. This module does not generate a model answer."
+               if sources else "No sufficiently relevant source passage was found. The system will not guess.")
+    return RetrievalResponse(query=request.query, scope=request.scope, insufficient_evidence=insufficient,
+                             message=message, sources=sources)

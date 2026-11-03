@@ -1,12 +1,19 @@
+from pathlib import Path
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from app.config import ensure_sqlite_parent, get_settings
+from app.config import PROJECT_ROOT, ensure_sqlite_parent, get_settings
 
 settings = get_settings()
-ensure_sqlite_parent(settings.database_url)
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+database_url = settings.database_url
+if database_url.startswith("sqlite:///"):
+    sqlite_path = Path(database_url[len("sqlite:///"):])
+    if not sqlite_path.is_absolute():
+        database_url = f"sqlite:///{(PROJECT_ROOT / sqlite_path).as_posix()}"
+ensure_sqlite_parent(database_url)
+connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+engine = create_engine(database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

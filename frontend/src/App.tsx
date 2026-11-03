@@ -8,6 +8,7 @@ type Profile = { applicant_name: string; education_level: string; course: string
 type Document = { id: string; filename: string; page_count: number; status: string; text_characters: number }
 type Requirement = { id: string; title: string; status: string; explanation: string; evidence_documents: string[] }
 type Report = { overall_status: string; disclaimer: string; requirements: Requirement[]; next_steps: string[] }
+type Retrieval = { query: string; scope: string; insufficient_evidence: boolean; message: string; sources: { document: string; page: number | null; section: string | null; excerpt: string; distance: number }[] }
 const blankProfile: Profile = { applicant_name: '', education_level: '', course: '', academic_year: '', marks_percentage: '' }
 
 export default function App() {
@@ -17,6 +18,8 @@ export default function App() {
   const [profile, setProfile] = useState<Profile>(blankProfile)
   const [documents, setDocuments] = useState<Document[]>([])
   const [report, setReport] = useState<Report | null>(null)
+  const [question, setQuestion] = useState('')
+  const [retrieval, setRetrieval] = useState<Retrieval | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -107,6 +110,13 @@ export default function App() {
     finally { setBusy(false) }
   }
 
+  async function searchSources(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setMessage(''); setRetrieval(null)
+    try { setRetrieval(await request(`/sessions/${session!.session_id}/retrieve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: question, scope: 'both' }) })) }
+    catch (error) { setMessage(error instanceof Error ? error.message : 'Source search failed') }
+    finally { setBusy(false) }
+  }
+
   async function deleteDocument(id: string) {
     try { await request(`/sessions/${session!.session_id}/documents/${id}`, { method: 'DELETE' }); setDocuments(documents.filter(d => d.id !== id)); setReport(null); setMessage('Document deleted.') }
     catch (error) { setMessage(error instanceof Error ? error.message : 'Could not delete document') }
@@ -157,8 +167,12 @@ export default function App() {
           <div className="requirements">{report.requirements.map(item => <details className="requirement" key={item.id}><summary><span className={`status status-${item.status.toLowerCase()}`}>{item.status.replaceAll('_',' ')}</span><strong>{item.title}</strong><span className="expand">+</span></summary><p>{item.explanation}</p>{item.evidence_documents.length > 0 && <small>Possible evidence: {item.evidence_documents.join(', ')}</small>}</details>)}</div>
           <h3>Suggested next steps</h3><ol className="next-steps">{report.next_steps.map(step => <li key={step}>{step}</li>)}</ol>
         </section>}
+        <section className="panel"><div className="panel-heading"><span className="step">03</span><div><h2>Search your source documents</h2><p>Semantic retrieval from the synthetic policy and this workspace’s PDFs. This module returns passages, not a generated answer.</p></div></div>
+          <form className="search-form" onSubmit={searchSources}><input required minLength={1} maxLength={1000} value={question} onChange={e => setQuestion(e.target.value)} placeholder="e.g. What supporting documents does the sample ask for?"/><button className="secondary-button" disabled={busy || !question.trim()}>{busy ? 'Searching…' : 'Find evidence'}</button></form>
+          {retrieval && <div className="retrieval-result"><p className={retrieval.insufficient_evidence ? 'empty' : 'retrieval-message'}>{retrieval.message}</p>{retrieval.sources.map((source, index) => <article className="source-card" key={`${source.document}-${source.page}-${index}`}><div className="source-label">{source.document}{source.page ? ` · Page ${source.page}` : ''}{source.section ? ` · ${source.section}` : ''}</div><blockquote>{source.excerpt}</blockquote></article>)}</div>}
+        </section>
       </div><aside className="side-note"><ShieldCheck size={20}/><h3>How to read this</h3><p>Profile fields are marked as provided. PDF keyword matches are only possible evidence and remain uncertain until a person checks them.</p><p>This synthetic workflow has no official policy source, eligibility rules, or approval decision.</p><div className="privacy-note">Your session token is held in this browser tab. Delete uploaded PDFs or the entire session when finished.</div></aside></div>
     </section>}
-    <footer><span>DASTAWAYS · PHASE 2</span><span>Demo workflow · No real identity documents requested</span></footer>
+    <footer><span>DASTAWAYS · PHASE 3</span><span>Demo workflow · No real identity documents requested</span></footer>
   </main>
 }

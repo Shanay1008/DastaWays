@@ -56,3 +56,24 @@ class ReadinessReport(BaseModel):
     requirements: list[RequirementResult]
     next_steps: list[str]
     generated_at: datetime
+
+
+class RetrievalRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    scope: str = Field(default="policy", pattern="^(policy|evidence|both)$")
+
+
+class RetrievedSource(BaseModel):
+    document: str
+    page: int | None = None
+    section: str | None = None
+    excerpt: str
+    distance: float
+
+
+class RetrievalResponse(BaseModel):
+    query: str
+    scope: str
+    insufficient_evidence: bool
+    message: str
+    sources: list[RetrievedSource]

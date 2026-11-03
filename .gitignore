@@ -9,4 +9,5 @@ dist/
 *.db
 uploads/
 chroma_data/
+**/chroma/
 .pytest_cache/
