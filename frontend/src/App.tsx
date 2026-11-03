@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react'
-import { ArrowRight, CheckCircle2, FileCheck2, FileUp, ShieldCheck, Trash2 } from 'lucide-react'
+import { ArrowRight, Download, FileCheck2, FileUp, ShieldCheck, Trash2 } from 'lucide-react'
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api'
 type Scheme = { id: string; name: string; label: string; description: string }
@@ -114,6 +114,27 @@ export default function App() {
     finally { setBusy(false) }
   }
 
+  async function downloadReport() {
+    setBusy(true); setMessage('')
+    try {
+      const response = await fetch(`${API}/sessions/${session!.session_id}/report/download`, {
+        headers: { Authorization: `Bearer ${session!.access_token}` },
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.detail ?? `Download failed (${response.status})`)
+      }
+      const blobUrl = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = `dastaways-readiness-${session!.session_id.slice(0, 8)}.pdf`
+      document.body.appendChild(link); link.click(); link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+      setMessage('Readiness report downloaded as a PDF.')
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Report download failed') }
+    finally { setBusy(false) }
+  }
+
   async function searchSources(event: FormEvent) {
     event.preventDefault(); setBusy(true); setMessage(''); setRetrieval(null)
     try { setRetrieval(await request(`/sessions/${session!.session_id}/retrieve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: question, scope: 'both' }) })) }
@@ -184,7 +205,7 @@ export default function App() {
           {documents.length === 0 && <p className="empty">No documents uploaded yet.</p>}
         </section>
         <button className="cta assess-button" onClick={assess} disabled={busy}>{busy ? 'Assessing…' : 'Generate readiness report'}<ArrowRight size={18}/></button>
-        {report && <section className="panel report-panel"><div className="report-top"><div><span className="pill">DEMO ASSESSMENT</span><h2>{report.overall_status.replaceAll('_',' ')}</h2></div><CheckCircle2 size={26}/></div><p className="report-disclaimer">{report.disclaimer}</p>
+        {report && <section className="panel report-panel"><div className="report-top"><div><span className="pill">DEMO ASSESSMENT</span><h2>{report.overall_status.replaceAll('_',' ')}</h2></div><button className="download-button" onClick={downloadReport} disabled={busy}><Download size={15}/>{busy ? 'Preparing…' : 'Download PDF'}</button></div><p className="report-disclaimer">{report.disclaimer}</p>
           <div className="requirements">{report.requirements.map(item => <details className="requirement" key={item.id}><summary><span className={`status status-${item.status.toLowerCase()}`}>{item.status.replaceAll('_',' ')}</span><strong>{item.title}</strong><span className="expand">+</span></summary><p>{item.explanation}</p>{item.evidence_documents.length > 0 && <small>Possible evidence: {item.evidence_documents.join(', ')}</small>}</details>)}</div>
           <h3>Suggested next steps</h3><ol className="next-steps">{report.next_steps.map(step => <li key={step}>{step}</li>)}</ol>
         </section>}

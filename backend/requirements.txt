@@ -10,3 +10,4 @@ langchain-text-splitters>=0.3.8,<2.0
 sentence-transformers>=3.3,<6.0
 langgraph>=1.0,<2.0
 langchain-openai>=1.0,<2.0
+reportlab>=4.2,<6.0

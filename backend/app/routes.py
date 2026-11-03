@@ -2,7 +2,7 @@ import hashlib
 from uuid import uuid4
 
 import fitz
-from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -189,6 +189,33 @@ def get_report(record: ApplicationSession = Depends(require_owned_session)):
     if not record.report:
         raise HTTPException(status_code=404, detail="No readiness report yet. Run an assessment first.")
     return record.report
+
+
+@router.get("/sessions/{session_id}/report/download")
+def download_readiness_report(
+    record: ApplicationSession = Depends(require_owned_session),
+    db: Session = Depends(get_db),
+):
+    from app.services.assessment import evaluate_readiness
+    from app.services.report_pdf import render_readiness_report
+
+    if not record.report:
+        if not record.profile:
+            raise HTTPException(status_code=404, detail="Save applicant information and generate a report first")
+        documents = db.query(ApplicantDocument).filter_by(session_id=record.id).all()
+        report = evaluate_readiness(record.id, DEMO_SCHEME.id, record.profile, documents)
+        record.report = report.model_dump(mode="json")
+        db.commit()
+    else:
+        report = ReadinessReport.model_validate(record.report)
+    pdf_bytes = render_readiness_report(report, record.profile or {})
+    filename = f"dastaways-readiness-{record.id[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.post("/sessions/{session_id}/retrieve", response_model=RetrievalResponse)
