@@ -4,7 +4,7 @@
 
 DastaWays is an evidence-driven application readiness platform for scholarship, grant, and public-service applications. This repository is being built incrementally. The current MVP has a FastAPI service, SQLite-backed anonymous sessions, a React/TypeScript workflow, deterministic readiness checks, and source retrieval.
 
-## Current module: Phase 5 report export
+## Current module: Phase 6 backend regression checks
 
 - Synthetic demo scholarship with no official policy claims
 - Applicant profile form (name, education level, course, academic year, optional marks)
@@ -19,6 +19,7 @@ DastaWays is an evidence-driven application readiness platform for scholarship, 
 - LangGraph workflow with explicit state, conditional tool-call routing, and five session-bound tools
 - Optional OpenAI chat model with tool calling; without an API key, a labeled deterministic demo route runs instead
 - Downloadable, session-protected PDF readiness report with applicant summary, per-requirement status/explanations, evidence filenames, next steps, and advisory disclaimer
+- Backend checks cover deterministic assessment status, text-only name-matching caveats, session-token hashing, PDF generation, and the authenticated API flow through PDF download
 
 There is no conventional account/password system. Session tokens are a lightweight MVP ownership mechanism, not production-grade authentication. Do not put real sensitive data in this demo. Scanned PDFs and OCR are not supported yet. The included scholarship policy is wholly synthetic, not official. With an OpenAI key configured, chat questions and any profile or document excerpts selected by tools are sent to the configured model provider; the UI displays this disclosure.
 
@@ -75,6 +76,20 @@ In the workspace, ask “What documents does the sample request?” or “What a
 
 The readiness report panel has a **Download PDF** action. It downloads the current saved report; if the report is visible from a deterministic chat check but not yet persisted, the endpoint regenerates and saves it from the current profile and documents before export. The PDF is generated in memory and is not retained on the server.
 
+### Run the Phase 6 backend regression checks
+
+From the repository root, with the backend virtual environment active:
+
+```powershell
+Set-Location backend
+python -m unittest discover -s tests -v
+Set-Location ..
+```
+
+The suite checks readiness rules, the identity-verification caveat, token hashing, PDF generation, and one complete API workflow: create a workspace, save a profile, assess, fetch the report, and download its PDF. The API workflow uses a temporary database and does not touch your local application data. `httpx` is included for FastAPI's test client.
+
+To manually verify the same flow in the browser, start the backend and frontend, create a workspace, save a profile, generate a report, and click **Download PDF**. Confirm the file opens and includes the applicant summary, requirement statuses, next steps, and advisory disclaimer.
+
 ### Try the Phase 2 workflow
 
 1. Create a private workspace.
@@ -85,7 +100,7 @@ The readiness report panel has a **Download PDF** action. It downloads the curre
 6. Ask a question in “Search your source documents” and inspect matching policy/evidence passages and citations.
 7. Delete test documents or the full workspace when finished.
 
-Verification so far: the user ran the Phase 3 retrieval evaluation and confirmed all three cases passed. `npm run build` and Python source compilation pass. I generated and visually checked representative one-page and longer multi-page PDFs with ReportLab/Poppler. The live FastAPI download route has not been exercised here, and real model inference still requires a configured provider key.
+Verification so far: the user ran the Phase 3 retrieval evaluation and confirmed all three cases passed. `npm run build` passed after the report export changes. Representative one-page and longer multi-page PDFs were generated and visually checked with ReportLab/Poppler. Phase 6 now includes four service-level checks and an authenticated end-to-end API check through PDF download. Browser verification is documented above.
 
 ## Planned modules
 
@@ -93,7 +108,7 @@ Verification so far: the user ran the Phase 3 retrieval evaluation and confirmed
 2. One clearly labeled demo scheme, applicant profile, PDF uploads, deterministic readiness checks.
 3. Policy/evidence ingestion, embeddings, Chroma retrieval and source citations (complete; retrieval evaluation passed).
 4. LLM integration and LangGraph tool-calling workflow.
-5. Downloadable readiness report and report polish (current).
-6. Tests, end-to-end verification, and technical documentation.
+5. Downloadable readiness report and report polish (complete).
+6. Backend regression checks and API end-to-end verification (complete).
 
 The current scheme is explicitly synthetic and carries no official eligibility criteria.
