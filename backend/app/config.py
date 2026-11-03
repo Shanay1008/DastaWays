@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     rag_distance_threshold: float = 0.65
     rag_top_k: int = 4
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4o-mini"
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
 
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
 

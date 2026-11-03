@@ -1,6 +1,4 @@
-from datetime import datetime, timezone
 import hashlib
-import re
 from uuid import uuid4
 
 import fitz
@@ -10,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.models import ApplicantDocument, ApplicationSession
-from app.schemas import ApplicantProfile, DocumentSummary, HealthResponse, ReadinessReport, RequirementResult, RetrievalRequest, RetrievalResponse, SchemeSummary, SessionCreated
+from app.schemas import ApplicantProfile, ChatRequest, ChatResponse, DocumentSummary, HealthResponse, ReadinessReport, RetrievalRequest, RetrievalResponse, SchemeSummary, SessionCreated
 from app.security import create_session_token, hash_token
 
 router = APIRouter(prefix="/api")
@@ -179,59 +177,8 @@ def assess(record: ApplicationSession = Depends(require_owned_session), db: Sess
     if not record.profile:
         raise HTTPException(status_code=409, detail="Save applicant information before assessment")
     docs = db.query(ApplicantDocument).filter_by(session_id=record.id).all()
-    profile = record.profile
-    requirements: list[RequirementResult] = []
-    profile_fields = [
-        ("education_level", "Education level"),
-        ("course", "Course of study"), ("academic_year", "Academic year"),
-    ]
-    for field, title in profile_fields:
-        value = profile.get(field)
-        requirements.append(RequirementResult(id=field, title=title, status="UNCERTAIN" if value else "MISSING",
-                                              explanation="Self-reported in the applicant profile; the demo does not independently verify it." if value else "Provide this information in the applicant profile."))
-    applicant_name = profile.get("applicant_name", "")
-    normalized_name = re.sub(r"[^a-z0-9]", "", applicant_name.casefold())
-    name_matches = [
-        document for document in docs
-        if normalized_name and normalized_name in re.sub(r"[^a-z0-9]", "", document.extracted_text.casefold())
-    ]
-    if name_matches:
-        name_status = "VERIFIED"
-        name_explanation = "The applicant name appears in the extracted PDF text. This confirms a text match only; it does not authenticate the PDF or verify the applicant's identity."
-    elif docs:
-        name_status = "UNCERTAIN"
-        name_explanation = "The applicant name was not found in the extracted text of the uploaded PDFs. Check spelling or upload a readable document that includes the name."
-    else:
-        name_status = "UNCERTAIN"
-        name_explanation = "Self-reported in the applicant profile. Upload readable supporting evidence to compare it against document text."
-    requirements.insert(0, RequirementResult(id="applicant_name", title="Applicant name", status=name_status,
-                                             explanation=name_explanation,
-                                             evidence_documents=[d.filename for d in name_matches]))
-    # This is a transparent demo heuristic, not official document validation.
-    categories = {
-        "transcript": ("Academic transcript", ("transcript", "marksheet", "mark sheet", "grade report")),
-        "enrollment": ("Proof of enrollment", ("enrollment", "enrolment", "student status", "admission")),
-    }
-    for key, (title, terms) in categories.items():
-        matches = [d for d in docs if any(term in (d.filename + " " + d.extracted_text).lower() for term in terms)]
-        if not matches:
-            state, explanation = "MISSING", "No uploaded PDF text clearly matched this demo document category."
-        else:
-            state, explanation = "UNCERTAIN", "A text or filename keyword matched. This only indicates possible evidence; a person must confirm the document is genuine, current, and valid."
-        requirements.append(RequirementResult(id=key, title=title, status=state, explanation=explanation,
-                                              evidence_documents=[d.filename for d in matches]))
-    if profile.get("marks_percentage") is not None:
-        requirements.append(RequirementResult(id="marks", title="Academic marks", status="UNCERTAIN",
-                                              explanation="Marks were provided, but this synthetic demo defines no official threshold."))
-    states = [item.status for item in requirements]
-    overall = "NEEDS_ATTENTION" if "MISSING" in states else "REVIEW_REQUIRED" if "UNCERTAIN" in states else "READY_FOR_REVIEW"
-    steps = ["Review each uncertain item and confirm the original document is valid.",
-             "This synthetic demo has no official policy source; check the relevant authority's current instructions."]
-    if "MISSING" in states:
-        steps.insert(0, "Complete the missing profile fields or add relevant supporting evidence.")
-    report = ReadinessReport(session_id=record.id, scheme_id=DEMO_SCHEME.id, overall_status=overall,
-                             disclaimer="Synthetic demo assessment only. Not official eligibility, verification, or approval.",
-                             requirements=requirements, next_steps=steps, generated_at=datetime.now(timezone.utc))
+    from app.services.assessment import evaluate_readiness
+    report = evaluate_readiness(record.id, DEMO_SCHEME.id, record.profile, docs)
     record.report = report.model_dump(mode="json")
     db.commit()
     return report
@@ -272,3 +219,24 @@ def retrieve_for_session(
                if sources else "No sufficiently relevant source passage was found. The system will not guess.")
     return RetrievalResponse(query=request.query, scope=request.scope, insufficient_evidence=insufficient,
                              message=message, sources=sources)
+
+
+@router.post("/sessions/{session_id}/chat", response_model=ChatResponse)
+def chat_with_agent(
+    request: ChatRequest,
+    record: ApplicationSession = Depends(require_owned_session),
+):
+    from app.agent.workflow import run_chat
+
+    try:
+        result = run_chat(record.id, request.query, DEMO_SCHEME.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        from app.config import get_settings
+        settings = get_settings()
+        if settings.openai_api_key:
+            return ChatResponse(answer="The configured AI provider could not complete this request. No AI-generated answer was produced. Check the API key, model, and provider connection.",
+                                mode="llm_error", error_info="LLM request failed")
+        raise HTTPException(status_code=503, detail="The agent workflow is unavailable. Check the Phase 4 dependencies.") from exc
+    return ChatResponse(**result)

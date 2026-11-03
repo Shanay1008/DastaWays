@@ -77,3 +77,22 @@ class RetrievalResponse(BaseModel):
     insufficient_evidence: bool
     message: str
     sources: list[RetrievedSource]
+
+
+class ChatRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+
+
+class ToolActivity(BaseModel):
+    tool: str
+    status: str
+    summary: str
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    mode: str
+    tool_activity: list[ToolActivity] = Field(default_factory=list)
+    citations: list[RetrievedSource] = Field(default_factory=list)
+    requirement_assessment: dict | None = None
+    error_info: str | None = None

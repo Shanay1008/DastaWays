@@ -9,6 +9,8 @@ type Document = { id: string; filename: string; page_count: number; status: stri
 type Requirement = { id: string; title: string; status: string; explanation: string; evidence_documents: string[] }
 type Report = { overall_status: string; disclaimer: string; requirements: Requirement[]; next_steps: string[] }
 type Retrieval = { query: string; scope: string; insufficient_evidence: boolean; message: string; sources: { document: string; page: number | null; section: string | null; excerpt: string; distance: number }[] }
+type ChatReply = { answer: string; mode: string; tool_activity: { tool: string; status: string; summary: string }[]; citations: { document: string; page: number | null; section: string | null; excerpt: string; distance: number }[]; requirement_assessment: { overall_status?: string; requirements?: Requirement[]; next_steps?: string[] } | null; error_info: string | null }
+type ChatTurn = { question: string; response: ChatReply }
 const blankProfile: Profile = { applicant_name: '', education_level: '', course: '', academic_year: '', marks_percentage: '' }
 
 export default function App() {
@@ -20,6 +22,8 @@ export default function App() {
   const [report, setReport] = useState<Report | null>(null)
   const [question, setQuestion] = useState('')
   const [retrieval, setRetrieval] = useState<Retrieval | null>(null)
+  const [chatInput, setChatInput] = useState('')
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([])
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -117,6 +121,23 @@ export default function App() {
     finally { setBusy(false) }
   }
 
+  async function askAssistant(event: FormEvent) {
+    event.preventDefault()
+    const prompt = chatInput.trim()
+    if (!prompt) return
+    setBusy(true); setMessage(''); setChatInput('')
+    try {
+      const response: ChatReply = await request(`/sessions/${session!.session_id}/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: prompt }),
+      })
+      setChatTurns(current => [...current, { question: prompt, response }])
+      if (response.requirement_assessment?.requirements && response.requirement_assessment.next_steps) {
+        setReport(response.requirement_assessment as Report)
+      }
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Assistant request failed'); setChatInput(prompt) }
+    finally { setBusy(false) }
+  }
+
   async function deleteDocument(id: string) {
     try { await request(`/sessions/${session!.session_id}/documents/${id}`, { method: 'DELETE' }); setDocuments(documents.filter(d => d.id !== id)); setReport(null); setMessage('Document deleted.') }
     catch (error) { setMessage(error instanceof Error ? error.message : 'Could not delete document') }
@@ -128,7 +149,7 @@ export default function App() {
       await request(`/sessions/${session!.session_id}`, { method: 'DELETE' })
       sessionStorage.removeItem(`dastaways:${session!.session_id}`)
       sessionStorage.removeItem('dastaways:session-id')
-      setSession(null); setProfile(blankProfile); setDocuments([]); setReport(null); setMessage('Workspace and its data deleted.')
+      setSession(null); setProfile(blankProfile); setDocuments([]); setReport(null); setChatTurns([]); setMessage('Workspace and its data deleted.')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not delete workspace') }
   }
 
@@ -171,8 +192,17 @@ export default function App() {
           <form className="search-form" onSubmit={searchSources}><input required minLength={1} maxLength={1000} value={question} onChange={e => setQuestion(e.target.value)} placeholder="e.g. What supporting documents does the sample ask for?"/><button className="secondary-button" disabled={busy || !question.trim()}>{busy ? 'Searching…' : 'Find evidence'}</button></form>
           {retrieval && <div className="retrieval-result"><p className={retrieval.insufficient_evidence ? 'empty' : 'retrieval-message'}>{retrieval.message}</p>{retrieval.sources.map((source, index) => <article className="source-card" key={`${source.document}-${source.page}-${index}`}><div className="source-label">{source.document}{source.page ? ` · Page ${source.page}` : ''}{source.section ? ` · ${source.section}` : ''}</div><blockquote>{source.excerpt}</blockquote></article>)}</div>}
         </section>
+        <section className="panel assistant-panel"><div className="panel-heading"><span className="step">04</span><div><h2>DastaWays assistant</h2><p>LangGraph can use policy search, your profile, uploaded evidence, and deterministic readiness tools.</p></div></div>
+          <div className="privacy-disclosure">If an OpenAI API key is configured, your question and any profile or document excerpts selected by tools may be sent to that provider. Avoid sensitive personal information.</div>
+          <div className="chat-history">{chatTurns.length === 0 ? <p className="empty">Ask a question to start. Without an API key, the graph uses a clearly labeled deterministic demo route.</p> : chatTurns.map((turn, index) => <div className="chat-turn" key={`${index}-${turn.question}`}><div className="chat-question">{turn.question}</div><div className="chat-answer"><div className="mode-label">{turn.response.mode === 'llm' ? 'AI model with tools' : turn.response.mode === 'llm_error' ? 'AI unavailable' : 'Deterministic demo · no model inference'}</div><p>{turn.response.answer}</p>
+            {turn.response.tool_activity.length > 0 && <div className="tool-activity"><strong>Tool activity</strong>{turn.response.tool_activity.map((activity, toolIndex) => <span key={`${activity.tool}-${toolIndex}`}><code>{activity.tool}</code> · {activity.summary}</span>)}</div>}
+            {turn.response.requirement_assessment && <div className="chat-assessment">Readiness status: <strong>{turn.response.requirement_assessment.overall_status?.replaceAll('_',' ')}</strong>{turn.response.requirement_assessment.requirements?.map(item => <span key={item.id}><b>{item.title}: {item.status}</b> — {item.explanation}</span>)}{turn.response.requirement_assessment.next_steps?.map(step => <span key={step}>{step}</span>)}</div>}
+            {turn.response.citations.length > 0 && <div className="chat-citations"><strong>Retrieved sources</strong>{turn.response.citations.map((citation, citationIndex) => <article className="source-card" key={`${citation.document}-${citation.page}-${citationIndex}`}><div className="source-label">{citation.document}{citation.page ? ` · Page ${citation.page}` : ''}{citation.section ? ` · ${citation.section}` : ''}</div><blockquote>{citation.excerpt}</blockquote></article>)}</div>}
+          </div></div>)}</div>
+          <form className="search-form chat-form" onSubmit={askAssistant}><input required maxLength={2000} value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="What am I missing? Why is this uncertain?"/><button className="cta" disabled={busy || !chatInput.trim()}>{busy ? 'Thinking…' : 'Ask assistant'}<ArrowRight size={16}/></button></form>
+        </section>
       </div><aside className="side-note"><ShieldCheck size={20}/><h3>How to read this</h3><p>Profile fields are marked as provided. PDF keyword matches are only possible evidence and remain uncertain until a person checks them.</p><p>This synthetic workflow has no official policy source, eligibility rules, or approval decision.</p><div className="privacy-note">Your session token is held in this browser tab. Delete uploaded PDFs or the entire session when finished.</div></aside></div>
     </section>}
-    <footer><span>DASTAWAYS · PHASE 3</span><span>Demo workflow · No real identity documents requested</span></footer>
+    <footer><span>DASTAWAYS · PHASE 4</span><span>Demo workflow · No real identity documents requested</span></footer>
   </main>
 }

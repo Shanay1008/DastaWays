@@ -4,7 +4,7 @@
 
 DastaWays is an evidence-driven application readiness platform for scholarship, grant, and public-service applications. This repository is being built incrementally. The current MVP has a FastAPI service, SQLite-backed anonymous sessions, a React/TypeScript workflow, deterministic readiness checks, and source retrieval.
 
-## Current module: Phase 3 retrieval
+## Current module: Phase 4 assistant
 
 - Synthetic demo scholarship with no official policy claims
 - Applicant profile form (name, education level, course, academic year, optional marks)
@@ -16,8 +16,10 @@ DastaWays is an evidence-driven application readiness platform for scholarship, 
 - Local semantic retrieval uses LangChain text splitting, Hugging Face sentence-transformer embeddings, and persistent Chroma collections
 - Synthetic demo policy passages carry section citations; uploaded applicant evidence is indexed separately and filtered by the owning session
 - Retrieved excerpts are returned as sources; this module does not fabricate an LLM-generated answer
+- LangGraph workflow with explicit state, conditional tool-call routing, and five session-bound tools
+- Optional OpenAI chat model with tool calling; without an API key, a labeled deterministic demo route runs instead
 
-There is no conventional account/password system. Session tokens are a lightweight MVP ownership mechanism, not production-grade authentication. Do not put real sensitive data in this demo. Scanned PDFs and OCR are not supported yet. The included scholarship policy is wholly synthetic, not official.
+There is no conventional account/password system. Session tokens are a lightweight MVP ownership mechanism, not production-grade authentication. Do not put real sensitive data in this demo. Scanned PDFs and OCR are not supported yet. The included scholarship policy is wholly synthetic, not official. With an OpenAI key configured, chat questions and any profile or document excerpts selected by tools are sent to the configured model provider; the UI displays this disclosure.
 
 ## Run locally
 
@@ -55,6 +57,21 @@ python -m app.rag.evaluate_retrieval
 
 The first command indexes the invented sample policy into `data/chroma/`. The second runs three source-retrieval checks. Applicant PDFs are indexed into a separate Chroma collection and every evidence query filters by the current session ID. The search UI shows the retrieved passages with their source and page/section metadata; it does not yet compose a natural-language answer.
 
+### Configure and try the Phase 4 assistant
+
+For real model inference, put your own key in the local `.env` file:
+
+```dotenv
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your_key_here
+# Optional: OPENAI_BASE_URL=https://your-compatible-endpoint/v1
+```
+
+Restart the API after changing `.env`. Without a key, the LangGraph workflow uses a clearly labeled deterministic demo tool-selection route and does not claim model inference. With a key, the assistant can use these tools: `search_scheme_policy`, `get_applicant_profile`, `inspect_submitted_documents`, `evaluate_requirements`, and `generate_readiness_report`. LangGraph routes tool calls through a `ToolNode`; deterministic logic remains the authority for requirement statuses. Never commit `.env` or share the key.
+
+In the workspace, ask “What documents does the sample request?” or “What am I missing?”. The UI shows the assistant mode, tool activity, readiness results when relevant, and citations from retrieved passages. No application submission or other external action is available.
+
 ### Try the Phase 2 workflow
 
 1. Create a private workspace.
@@ -64,15 +81,15 @@ The first command indexes the invented sample policy into `data/chroma/`. The se
 5. Ask a question in “Search your source documents” and inspect matching policy/evidence passages and citations.
 6. Delete test documents or the full workspace when finished.
 
-Verification in this environment: `npm run build` passes (TypeScript compile and Vite production build); Python source compilation passes. The API and retrieval evaluation could not be run because FastAPI, SQLAlchemy, and the Phase 3 Python dependencies are not installed in the available Python runtime. No backend, embedding, Chroma, or end-to-end results are claimed.
+Verification so far: the user ran the Phase 3 retrieval evaluation and confirmed all three cases passed. `npm run build` and Python source compilation pass in the available workspace runtime. Phase 4 model/API calls have not been executed here; real model inference requires a configured provider key. No model call or end-to-end result is claimed.
 
 ## Planned modules
 
 1. Foundation: API, frontend, configuration, database, anonymous session ownership.
-2. One clearly labeled demo scheme, applicant profile, PDF uploads, deterministic readiness checks (current).
-3. Policy/evidence ingestion, embeddings, Chroma retrieval and source citations (current; no generated answer yet).
-4. LLM integration and LangGraph tools/workflow.
-5. Connected report and assistant UI, downloadable report.
+2. One clearly labeled demo scheme, applicant profile, PDF uploads, deterministic readiness checks.
+3. Policy/evidence ingestion, embeddings, Chroma retrieval and source citations (complete; retrieval evaluation passed).
+4. LLM integration and LangGraph tool-calling workflow (current).
+5. Downloadable readiness report and report polish.
 6. Tests, end-to-end verification, and technical documentation.
 
 The current scheme is explicitly synthetic and carries no official eligibility criteria.
